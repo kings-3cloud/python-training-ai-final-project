@@ -12,7 +12,7 @@ study-assistant/
 ```
 
 ## Setup
-
+Change directory to `cd study-assistant`
 1. Rename `.env.example` to `.env` and fill in `AGENT_ENDPOINT`.
 2. Install dependencies: `pip install -r requirements.txt`
 3. Run MCP server: `python -m mcp_server.server`
