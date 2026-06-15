@@ -4,10 +4,17 @@ Flask Application for the Personal Study Assistant Agent Client.
 Provides a web interface for interacting with the Study Assistant agent.
 """
 
+import io
+
 from flask import Flask, render_template, request, jsonify
 import markdown
 import bleach
+import PyPDF2
+from werkzeug.utils import secure_filename
 from agent_client import AgentClient
+
+MAX_PDF_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_PDF_CHARS = 4000
 
 app = Flask(__name__)
 
@@ -104,6 +111,46 @@ def reset():
     if agent:
         agent.reset_session()
     return jsonify({'status': 'success'})
+
+
+@app.route('/upload', methods=['POST'])
+def upload_pdf():
+    """Accept a PDF file upload, extract its text, and return the content."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'error': 'No file selected'}), 400
+
+    filename = secure_filename(file.filename)
+    if not filename.lower().endswith('.pdf'):
+        return jsonify({'error': 'Only PDF files are supported'}), 400
+
+    file_bytes = file.read()
+
+    if len(file_bytes) > MAX_PDF_SIZE:
+        return jsonify({'error': 'File too large (max 10 MB)'}), 400
+
+    # Validate PDF magic bytes — do not trust extension alone
+    if not file_bytes.startswith(b'%PDF'):
+        return jsonify({'error': 'File does not appear to be a valid PDF'}), 400
+
+    try:
+        reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+        pages = [page.extract_text() or '' for page in reader.pages]
+        text = '\n'.join(pages).strip()
+    except Exception as e:
+        return jsonify({'error': f'Could not read PDF: {e}'}), 422
+
+    if not text:
+        return jsonify({'error': 'No text could be extracted (the PDF may be image-only)'}), 422
+
+    return jsonify({
+        'filename': filename,
+        'content': text[:MAX_PDF_CHARS],
+        'truncated': len(text) > MAX_PDF_CHARS
+    })
 
 
 if __name__ == '__main__':

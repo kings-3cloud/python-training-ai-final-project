@@ -45,15 +45,24 @@
 
             <!-- Input Area -->
             <div class="input-container" role="form" aria-label="Message input form">
+                <!-- Hidden file input — triggered by the upload button -->
+                <input type="file" id="pdfInput" accept=".pdf"
+                    class="sr-only" aria-label="Choose a PDF file to upload">
+
+                <button id="uploadBtn" class="upload-btn" title="Upload a PDF document"
+                    aria-label="Upload PDF" tabindex="2">
+                    <span aria-hidden="true">📎</span>
+                </button>
+
                 <label for="messageInput" class="sr-only">Type your message</label>
                 <input type="text" id="messageInput" class="message-input"
-                    placeholder="Type your message..."
+                    placeholder="Type a message or upload a PDF with 📎"
                     autocomplete="off"
                     aria-label="Message input field"
                     aria-describedby="inputHelp"
                     tabindex="1" maxlength="10000">
                 <button id="sendBtn" class="send-btn" title="Send message"
-                    aria-label="Send message" tabindex="2">
+                    aria-label="Send message" tabindex="3">
                     <span aria-hidden="true">➤</span>
                 </button>
             </div>

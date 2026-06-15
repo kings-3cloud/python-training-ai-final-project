@@ -1,9 +1,11 @@
-// script.js — handles chat form submission, message rendering, and session reset.
+// script.js — handles chat form submission, PDF upload, message rendering, and session reset.
 
 const messageInput = document.getElementById('messageInput');
 const sendBtn      = document.getElementById('sendBtn');
 const chatMessages = document.getElementById('chatMessages');
 const resetBtn     = document.getElementById('resetBtn');
+const uploadBtn    = document.getElementById('uploadBtn');
+const pdfInput     = document.getElementById('pdfInput');
 
 // ── Event listeners ──────────────────────────────────────────────────────────
 
@@ -16,8 +18,14 @@ messageInput.addEventListener('keypress', (e) => {
 });
 resetBtn.addEventListener('click', resetSession);
 
+// Upload button opens the hidden file picker
+uploadBtn.addEventListener('click', () => pdfInput.click());
+pdfInput.addEventListener('change', () => {
+    if (pdfInput.files.length > 0) uploadPdf(pdfInput.files[0]);
+});
+
 // Space-bar activation for button accessibility
-[sendBtn, resetBtn].forEach(btn => {
+[sendBtn, resetBtn, uploadBtn].forEach(btn => {
     btn.addEventListener('keydown', (e) => {
         if (e.key === ' ' || e.key === 'Spacebar') {
             e.preventDefault();
@@ -65,6 +73,67 @@ function sendMessage() {
             addMessage(`Error: ${err.message}`, 'agent');
             setInputDisabled(false);
             messageInput.focus();
+        });
+}
+
+function uploadPdf(file) {
+    const welcome = document.querySelector('.welcome-message');
+    if (welcome) welcome.remove();
+
+    // Show the filename as a user message
+    addMessage(`📎 ${file.name}`, 'user');
+    setInputDisabled(true);
+
+    const typingIndicator = addTypingIndicator();
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/upload', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            typingIndicator.remove();
+            if (data.error) {
+                addMessage(`Error: ${data.error}`, 'agent');
+                setInputDisabled(false);
+                messageInput.focus();
+                return;
+            }
+            // Feed the extracted content into the agent conversation
+            const truncationNote = data.truncated
+                ? ' (truncated to 4 000 characters)'
+                : '';
+            const agentMessage =
+                `I've uploaded "${data.filename}"${truncationNote}. ` +
+                `Here is its content:\n\n${data.content}\n\n` +
+                `What would you like to do with this? I can generate a quiz, summarise it, or help you study it.`;
+
+            return fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: agentMessage })
+            })
+                .then(r => r.json())
+                .then(chatData => {
+                    if (chatData.error) {
+                        addMessage(`Error: ${chatData.error}`, 'agent');
+                    } else if (chatData.response_html) {
+                        addMessage(chatData.response_html, 'agent', { isHtml: true });
+                    } else {
+                        addMessage(chatData.response, 'agent');
+                    }
+                    setInputDisabled(false);
+                    messageInput.focus();
+                });
+        })
+        .catch(err => {
+            typingIndicator.remove();
+            addMessage(`Error: ${err.message}`, 'agent');
+            setInputDisabled(false);
+            messageInput.focus();
+        })
+        .finally(() => {
+            // Reset file input so the same file can be re-uploaded if needed
+            pdfInput.value = '';
         });
 }
 
@@ -137,4 +206,5 @@ function addTypingIndicator() {
 function setInputDisabled(disabled) {
     messageInput.disabled = disabled;
     sendBtn.disabled = disabled;
+    uploadBtn.disabled = disabled;
 }

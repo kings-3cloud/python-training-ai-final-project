@@ -314,6 +314,45 @@ body {
     box-shadow: 0 0 0 3px rgba(17, 153, 142, 0.35);
 }
 
+/* Upload button */
+.upload-btn {
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    border: 1px solid #d0d0d0;
+    border-radius: 10px;
+    font-size: 20px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #555;
+}
+
+.upload-btn:hover {
+    background: #f0faf5;
+    border-color: #11998e;
+    color: #11998e;
+}
+
+.upload-btn:active {
+    transform: scale(0.94);
+}
+
+.upload-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.upload-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(17, 153, 142, 0.25);
+    border-color: #11998e;
+}
+
 /* Footer */
 .footer {
     text-align: center;
