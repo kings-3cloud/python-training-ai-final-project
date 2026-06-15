@@ -1,5 +1,12 @@
 # MCP server entry point: registers and serves the three study-assistant tools via MCP.
 
+import sys
+from pathlib import Path
+
+# Ensure study-assistant/ is on the path so `mcp_server.*` imports resolve
+# whether the server is launched via `python -m mcp_server.server` or `mcp dev server.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from mcp.server.fastmcp import FastMCP
 
 from mcp_server.tools.fetch_url import fetch_url_content

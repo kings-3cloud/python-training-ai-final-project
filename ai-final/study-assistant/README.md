@@ -17,3 +17,15 @@ Change directory to `cd study-assistant`
 2. Install dependencies: `pip install -r requirements.txt`
 3. Run MCP server: `python -m mcp_server.server`
 4. Run agent app: `python agent/app.py`
+
+## Run MCP server
+```
+# from inside mcp_server/ (what mcp dev does)
+mcp dev server.py
+
+# from study-assistant/ root
+python -m mcp_server.server
+
+mcp inspector
+npx @modelcontextprotocol/inspector
+```
