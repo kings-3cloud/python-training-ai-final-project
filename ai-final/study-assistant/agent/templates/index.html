@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Personal Study Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+    <!-- Chat UI — placeholder, logic added in a later step -->
+    <div id="chat-container">
+        <div id="messages"></div>
+        <form id="chat-form">
+            <input type="text" id="user-input" placeholder="Ask me anything..." autocomplete="off" />
+            <button type="submit">Send</button>
+        </form>
+    </div>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
