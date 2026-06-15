@@ -1,11 +1,13 @@
-// script.js — handles chat form submission, PDF upload, message rendering, and session reset.
+// script.js — handles chat form submission, PDF upload, message rendering, session reset, and mode switching.
 
-const messageInput = document.getElementById('messageInput');
-const sendBtn      = document.getElementById('sendBtn');
-const chatMessages = document.getElementById('chatMessages');
-const resetBtn     = document.getElementById('resetBtn');
-const uploadBtn    = document.getElementById('uploadBtn');
-const pdfInput     = document.getElementById('pdfInput');
+const messageInput   = document.getElementById('messageInput');
+const sendBtn        = document.getElementById('sendBtn');
+const chatMessages   = document.getElementById('chatMessages');
+const resetBtn       = document.getElementById('resetBtn');
+const uploadBtn      = document.getElementById('uploadBtn');
+const pdfInput       = document.getElementById('pdfInput');
+const modeOnlineBtn  = document.getElementById('modeOnlineBtn');
+const modeOfflineBtn = document.getElementById('modeOfflineBtn');
 
 // ── Event listeners ──────────────────────────────────────────────────────────
 
@@ -17,6 +19,17 @@ messageInput.addEventListener('keypress', (e) => {
     }
 });
 resetBtn.addEventListener('click', resetSession);
+
+// Mode toggle buttons
+[modeOnlineBtn, modeOfflineBtn].forEach(btn => {
+    btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+});
+
+// Sync toggle state with server on load
+fetch('/mode')
+    .then(r => r.json())
+    .then(data => applyModeUI(data.mode))
+    .catch(() => {});
 
 // Upload button opens the hidden file picker
 uploadBtn.addEventListener('click', () => pdfInput.click());
@@ -74,6 +87,43 @@ function sendMessage() {
             setInputDisabled(false);
             messageInput.focus();
         });
+}
+
+function switchMode(newMode) {
+    setInputDisabled(true);
+    fetch('/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                addMessage(`Could not switch mode: ${data.error}`, 'agent');
+            } else {
+                applyModeUI(data.mode);
+                if (data.changed) {
+                    const label = data.mode === 'online' ? '☁️ Online (Foundry)' : '💻 Offline (local model)';
+                    addMessage(`Switched to ${label} mode. Conversation history has been reset.`, 'agent');
+                    // Reset history on the server too
+                    fetch('/reset', { method: 'POST' }).catch(() => {});
+                }
+            }
+            setInputDisabled(false);
+            messageInput.focus();
+        })
+        .catch(err => {
+            addMessage(`Error switching mode: ${err.message}`, 'agent');
+            setInputDisabled(false);
+        });
+}
+
+function applyModeUI(mode) {
+    const isOnline = mode === 'online';
+    modeOnlineBtn.classList.toggle('active', isOnline);
+    modeOfflineBtn.classList.toggle('active', !isOnline);
+    modeOnlineBtn.setAttribute('aria-pressed', String(isOnline));
+    modeOfflineBtn.setAttribute('aria-pressed', String(!isOnline));
 }
 
 function uploadPdf(file) {

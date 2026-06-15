@@ -1,11 +1,17 @@
 # Personal Study Assistant — AI Final Project
 
-A two-part application that combines a **Python MCP Server** exposing study tools with a **Flask web client** connected to a **Microsoft Foundry-hosted agent**. The agent orchestrates tool calls to fetch web content, generate quizzes, and persist study progress.
+A two-part application that combines a **Python MCP Server** exposing study tools with a **Flask web client** that supports two agent modes:
+
+- **Online** — connected to a Microsoft Foundry-hosted agent (gpt-4o, tool calls via MCP over stdio)
+- **Offline** — a local agent loop using any OpenAI-compatible model (Ollama, LM Studio) with tool calling handled directly in Python
+
+Both modes support fetching web content, generating quizzes, and persisting study progress.
 
 ---
 
 ## Architecture
 
+### Online mode (Foundry)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Browser                              │
@@ -14,7 +20,8 @@ A two-part application that combines a **Python MCP Server** exposing study tool
                          │ HTTP (JSON)
 ┌────────────────────────▼────────────────────────────────────┐
 │              Flask Web App  (agent/app.py)                  │
-│          POST /chat   POST /reset   GET /                   │
+│       GET /   POST /chat   POST /reset   POST /upload       │
+│       GET /mode   POST /mode                                │
 └────────────────────────┬────────────────────────────────────┘
                          │ OpenAI Responses API
                          │ DefaultAzureCredential
@@ -37,6 +44,33 @@ A two-part application that combines a **Python MCP Server** exposing study tool
                                     └────────────────────────┘
 ```
 
+### Offline mode (local model)
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Browser                              │
+└────────────────────────┬────────────────────────────────────┘
+                         │ HTTP (JSON)
+┌────────────────────────▼────────────────────────────────────┐
+│              Flask Web App  (agent/app.py)                  │
+└────────────────────────┬────────────────────────────────────┘
+                         │ Chat Completions API + tool_choice="auto"
+┌────────────────────────▼────────────────────────────────────┐
+│        Local model  (Ollama / LM Studio)                    │
+│   llama3.1 / llama3.2 / mistral / qwen2.5 / gemma3          │
+│   (model must support function/tool calling)                │
+└────────────────────────┬────────────────────────────────────┘
+                         │ Python function calls (no MCP needed)
+┌────────────────────────▼────────────────────────────────────┐
+│   OfflineAgentBackend + ToolRegistry  (backends/offline.py) │
+│  fetch_url_content()  generate_quiz()  save_progress()      │
+│  (imports mcp_server/tools/* directly — no MCP process)     │
+└────────────────────────┬────────────────────────────────────┘
+                                                │
+                                    ┌───────────▼────────────┐
+                                    │  data/progress.json    │
+                                    └────────────────────────┘
+```
+
 ---
 
 ## Project Structure
@@ -53,13 +87,23 @@ ai-final/
 │   │       ├── progress.py        # save_progress: appends score to progress.json
 │   │       └── __init__.py
 │   ├── agent/
-│   │   ├── agent_client.py        # AgentClient: wraps OpenAI Responses API + auth
-│   │   ├── app.py                 # Flask app: /  /chat  /reset
+│   │   ├── app.py                 # Flask routes only: / /chat /reset /upload /mode
+│   │   ├── factories.py           # Object construction — wires all dependencies (DIP)
+│   │   ├── agent_client.py        # Session manager only: history + backend delegation
+│   │   ├── backends/
+│   │   │   ├── base.py            # AgentBackend ABC (LSP / DIP)
+│   │   │   ├── online.py          # OnlineAgentBackend — Foundry Responses API
+│   │   │   ├── offline.py         # OfflineAgentBackend + ToolRegistry (OCP)
+│   │   │   └── __init__.py
+│   │   ├── services/
+│   │   │   ├── markdown_renderer.py  # MarkdownRenderer — HTML rendering (SRP)
+│   │   │   ├── pdf_extractor.py      # PdfExtractor — PDF text extraction (SRP)
+│   │   │   └── __init__.py
 │   │   ├── templates/
-│   │   │   └── index.html         # Chat UI (Jinja2)
+│   │   │   └── index.html         # Chat UI with mode toggle + PDF upload
 │   │   └── static/
 │   │       ├── style.css          # Chat styles (teal theme)
-│   │       └── script.js          # Fetch-based chat + typing indicator
+│   │       └── script.js          # Chat, upload, mode-switch logic
 │   ├── data/
 │   │   └── progress.json          # Persisted quiz results (append-only)
 │   ├── .env.example               # Environment variable template
@@ -77,29 +121,35 @@ ai-final/
 |---|---|---|
 | `mcp[cli]` | ≥ 1.0.0 | FastMCP framework; `mcp dev` / `mcp run` CLI |
 | `httpx` | ≥ 0.27.0 | HTTP client for `fetch_url_content` |
-| `PyPDF2` | ≥ 3.0.0 | PDF text extraction |
+| `PyPDF2` | ≥ 3.0.0 | PDF text extraction (URL + file upload) |
 | `beautifulsoup4` | ≥ 4.12.0 | HTML parsing helpers |
 
 ### Agent Client (Flask app)
 | Package | Version | Purpose |
 |---|---|---|
 | `flask` | ≥ 3.0.0 | Web framework |
-| `openai` | ≥ 2.38.0 | OpenAI-compatible client for Foundry endpoints |
-| `azure-identity` | ≥ 1.15.0 | `DefaultAzureCredential` for Foundry auth |
+| `openai` | ≥ 2.38.0 | OpenAI-compatible client (Foundry + local models) |
+| `azure-identity` | ≥ 1.15.0 | `DefaultAzureCredential` for online/Foundry auth |
 | `python-dotenv` | ≥ 1.0.0 | Loads `.env` into `os.environ` |
 | `markdown` | ≥ 3.7 | Converts agent responses from Markdown to HTML |
 | `bleach` | ≥ 6.1.0 | Sanitises rendered HTML before display |
+| `werkzeug` | (Flask dep) | `secure_filename` for PDF upload safety |
 
-### Cloud / Infrastructure
+### Online mode — Cloud / Infrastructure
 | Service | Role |
 |---|---|
 | **Microsoft Foundry** | Hosts the agent, manages system prompt, routes tool calls |
 | **Azure AI (gpt-4o)** | Model used by the hosted agent and `generate_quiz` |
-| **DefaultAzureCredential** | Passwordless auth — uses `az login` locally, Managed Identity in production |
+| **DefaultAzureCredential** | Passwordless auth — `az login` locally, Managed Identity in production |
+| **MCP stdio transport** | Foundry Toolkit launches the MCP server subprocess via `mcp.json` |
 
-### MCP Transport
-- **stdio** — the MCP server communicates over stdin/stdout
-- Foundry Toolkit launches the server process automatically via `mcp.json`
+### Offline mode — Local model
+| Component | Details |
+|---|---|
+| **Ollama / LM Studio** | Local OpenAI-compatible server |
+| **Supported models** | `llama3.1`, `llama3.2`, `mistral`, `qwen2.5`, `gemma3` |
+| **NOT supported** | `llama3` (3.0), `phi3-mini` — no tool/function calling |
+| **Tool execution** | `OfflineAgentBackend` + `ToolRegistry` import `mcp_server/tools/*` directly — no MCP process needed |
 
 ---
 
@@ -107,11 +157,12 @@ ai-final/
 
 ### Prerequisites
 - Python ≥ 3.11
+- Azure CLI logged in (`az login`) — **online mode only**
+- A Microsoft Foundry project with a `study-assistant` agent deployed — **online mode only**
+- Ollama or LM Studio with a tool-capable model — **offline mode only**
 - Node.js (for `npx @modelcontextprotocol/inspector` — optional)
-- Azure CLI logged in: `az login`
-- A Microsoft Foundry project with a `study-assistant` agent deployed
 
-### 1 — Clone and activate the virtual environment
+### 1 — Activate the virtual environment
 ```powershell
 cd ai-final
 .\.venv\Scripts\Activate.ps1
@@ -127,13 +178,24 @@ pip install -r study-assistant/requirements.txt
 cd study-assistant
 Copy-Item .env.example .env
 ```
-Edit `.env` and set:
+
+Edit `.env`:
+
 ```dotenv
-AGENT_ENDPOINT=https://<your-foundry-resource>.services.ai.azure.com/api/projects/<your-project-name>/
+# Which mode to start in (can be switched at runtime from the UI)
+DEFAULT_MODE=online
+
+# ── Online (Foundry) ──────────────────────────────────
+AGENT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>/
+
+# ── Offline (local model) ─────────────────────────────
+OFFLINE_ENDPOINT=http://localhost:11434/v1   # Ollama default
+OFFLINE_MODEL=llama3.1                       # must support tool calling
+OFFLINE_API_KEY=ollama                       # Ollama ignores the value
 ```
 
-### 4 — Configure the MCP server in Foundry Toolkit
-`C:\Users\<you>\.aitk\mcp.json` should contain:
+### 4 — Configure the MCP server in Foundry Toolkit (online mode only)
+`C:\Users\<you>\.aitk\mcp.json`:
 ```json
 {
   "servers": {
@@ -147,6 +209,11 @@ AGENT_ENDPOINT=https://<your-foundry-resource>.services.ai.azure.com/api/project
 }
 ```
 
+### 5 — Pull a local model (offline mode only)
+```powershell
+ollama pull llama3.1
+```
+
 ---
 
 ## Running the Application
@@ -158,20 +225,35 @@ python app.py
 ```
 Open **http://localhost:5000**
 
+Use the **☁️ Online / 💻 Offline** toggle in the toolbar to switch modes at runtime. Switching resets the conversation history.
+
 ### Start the MCP server (standalone / for testing)
 ```powershell
-# From study-assistant/ root — correct way
+# From study-assistant/ root
 cd study-assistant
 python -m mcp_server.server
 
-# Via mcp dev (also from study-assistant/)
+# Via mcp dev
 mcp dev mcp_server/server.py
 ```
 
-### Inspect tools with MCP Inspector
+### Inspect MCP tools
 ```powershell
 npx @modelcontextprotocol/inspector
 ```
+
+---
+
+## Flask Endpoints
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/` | Serve the chat UI |
+| `POST` | `/chat` | `{ message }` → `{ response, response_html }` |
+| `POST` | `/reset` | Clear conversation history |
+| `POST` | `/upload` | Multipart PDF upload → `{ filename, content, truncated }` |
+| `GET` | `/mode` | Return current mode (`online`\|`offline`) |
+| `POST` | `/mode` | `{ mode }` → switch agent mode, reinitialise client |
 
 ---
 
@@ -182,19 +264,21 @@ Fetches and returns the text content of a URL (web page or PDF).
 - **Input:** `url: str`
 - **Output:** Plain text, truncated to 4 000 characters
 - **PDF support:** Uses PyPDF2 for `.pdf` URLs
-- **Error handling:** Returns an error string instead of raising
+- **Also available as:** PDF file upload via `/upload` endpoint
 
 ### `generate_quiz_tool`
-Generates a multiple-choice quiz on a topic via the Foundry model.
+Generates a multiple-choice quiz on a topic.
 - **Input:** `topic: str`, `num_questions: int` (default 5)
 - **Output:** `list[dict]` — each item has `question`, `options: [A,B,C,D]`, `answer`
-- **Auth:** Same `DefaultAzureCredential` + `AGENT_ENDPOINT` pattern as the Flask client
+- **Online:** calls Foundry model via OpenAI API
+- **Offline:** calls local model directly with a strict JSON-only prompt
 
 ### `save_progress_tool`
 Persists a quiz result to `data/progress.json`.
 - **Input:** `topic: str`, `score: int`, `total: int`
 - **Output:** Summary string e.g. `"Saved: 4/5 on Python Basics"`
 - **Storage:** Append-only JSON array with ISO 8601 UTC timestamps
+- **Works in both modes** — offline calls `progress.py` directly, no MCP needed
 
 ---
 
@@ -216,12 +300,29 @@ Expected format:
 ]
 ```
 
+Records accumulate across sessions — the file is never overwritten.
+
 ---
 
 ## Key Design Decisions
 
-- **No agent SDK in client code** — `agent_client.py` uses the plain `openai` package pointed at the Foundry endpoint. The agent framework (tool routing, system prompt, context management) runs entirely inside Foundry.
-- **MCP over stdio** — the server is a subprocess launched by the MCP host; no HTTP port needed.
+### Architecture — SOLID principles
+
+- **Single Responsibility** — each class/module does one thing: `app.py` routes requests; `AgentClient` manages history; `OnlineAgentBackend`/`OfflineAgentBackend` own their transport; `MarkdownRenderer` renders HTML; `PdfExtractor` parses PDFs; `factories.py` constructs the object graph.
+- **Open/Closed** — adding a new tool requires one `registry.register()` call in `factories.py`. Adding a new agent mode requires one `_build_*_backend()` function. No existing code is modified.
+- **Liskov Substitution** — `OnlineAgentBackend` and `OfflineAgentBackend` both implement `AgentBackend` and are fully interchangeable. `AgentClient` never checks which concrete type it holds.
+- **Interface Segregation** — `AgentBackend` exposes only `mode` and `send()`. `AgentClient` exposes only `send_message()`, `reset_session()`, and `mode`. Callers depend on nothing they don't use.
+- **Dependency Inversion** — `AgentClient` receives an `AgentBackend` instance; it never touches `OpenAI` or env vars. `app.py` calls `create_agent_client()` from `factories.py`; it never imports a concrete backend.
+
+### Runtime behaviour
+
+- **Dual-mode agent** — `create_agent_client(mode)` in `factories.py` selects the backend at init time. The UI toggle calls `POST /mode` which reinitialises the client without restarting Flask.
+- **Online uses Responses API** — Foundry endpoints expose `client.responses.create()`, not `chat.completions`. Tool routing and context management run entirely in Foundry.
+- **Offline uses Chat Completions + native tool calling** — `OfflineAgentBackend.send()` passes `TOOL_SCHEMAS` to the model, handles `finish_reason == "tool_calls"`, delegates to `ToolRegistry.execute()`, and loops until a final text response is returned.
+- **Offline tools call `mcp_server/tools/*` directly** — no MCP subprocess or stdio needed in offline mode. `fetch_url_content`, `save_progress` are imported and called as plain functions via `ToolRegistry`.
+- **MCP over stdio (online only)** — Foundry Toolkit launches the MCP server subprocess via `mcp.json`. The server is not needed for offline operation.
+- **Tool-calling model required for offline** — `llama3.1`/`3.2`, `mistral`, `qwen2.5`, `gemma3` support function calling. `llama3` (3.0) does not.
+- **PDF upload bypasses the URL tool** — `POST /upload` delegates to `PdfExtractor.extract()` and injects extracted text into the conversation directly, avoiding network round-trips for local files.
 - **Append-only progress** — `save_progress` never overwrites existing records, so full quiz history is preserved.
-- **Markdown sanitisation** — agent responses are rendered via `markdown` → `bleach` before being sent to the browser, preventing XSS while preserving rich formatting.
-- **Path-independent imports** — `server.py` inserts `study-assistant/` onto `sys.path` at startup, so `mcp dev server.py` and `python -m mcp_server.server` both work.
+- **Markdown sanitisation** — agent responses are rendered via `MarkdownRenderer` (`markdown` → `bleach`) before being sent to the browser, preventing XSS while preserving rich formatting.
+- **Path-independent imports** — `server.py` and `factories.py` each insert `study-assistant/` onto `sys.path` at startup, so all launch styles work correctly.

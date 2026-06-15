@@ -1,97 +1,70 @@
 """
-Agent Client - Handles interaction with the Microsoft Foundry Study Assistant agent.
+AgentClient — manages conversation history and delegates to an AgentBackend.
 
-Connects to the agent published in Microsoft Foundry using the OpenAI Responses API
-with DefaultAzureCredential authentication. Maintains multi-turn conversation history
-across fetch, quiz, and progress-tracking interactions.
+Single Responsibility: this class only manages session state (conversation
+history trimming and reset). All communication logic lives in the backend.
+
+Dependency Inversion: depends on the AgentBackend abstraction, not on any
+concrete OpenAI client or Azure credential.
 """
-
-import os
 import logging
-from typing import List, Dict, Any
-from dotenv import load_dotenv
+from typing import Any, Dict, List
 
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from openai import OpenAI
-
-load_dotenv()
+from backends.base import AgentBackend
 
 logger = logging.getLogger(__name__)
 
 
 class AgentClient:
-    """Client for interacting with the Foundry-hosted Personal Study Assistant agent."""
+    """Manages conversation history and delegates message sending to a backend."""
 
-    def __init__(self):
-        """Initialize the agent client with authentication and endpoint."""
-        self.agent_endpoint = os.getenv("AGENT_ENDPOINT", "").replace("/responses", "")
-        if not self.agent_endpoint:
-            raise ValueError("AGENT_ENDPOINT not found in environment variables")
-
-        # Create OpenAI client authenticated with Azure credentials
-        self.client = OpenAI(
-            api_key=get_bearer_token_provider(
-                DefaultAzureCredential(),
-                "https://ai.azure.com/.default",
-            ),
-            base_url=self.agent_endpoint,
-            default_query={"api-version": "v1"},
-        )
-
-        # Maintain conversation history (last 5 exchanges)
+    def __init__(self, backend: AgentBackend, max_history: int = 5) -> None:
+        self._backend = backend
+        self.max_history = max_history
         self.conversation_history: List[Dict[str, Any]] = []
-        self.max_history = 5
+
+    @property
+    def mode(self) -> str:
+        """Return the current backend mode identifier."""
+        return self._backend.mode
 
     def send_message(self, user_message: str) -> str:
         """
-        Send a message to the agent and return the response.
-
-        Args:
-            user_message: The text message from the user.
+        Append the user message to history, send to the backend, return the reply.
 
         Returns:
-            The agent's response text, or an error string on failure.
+            The assistant's response text, or an error string on failure.
         """
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message,
-        })
+        self.conversation_history.append({"role": "user", "content": user_message})
 
         try:
-            assistant_message = ""
-
-            response = self.client.responses.create(
-                input=self.conversation_history
-            )
-            assistant_message = response.output_text
-
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": assistant_message,
-            })
-
-            # Trim to max_history exchanges (one exchange = 1 user + 1 assistant)
-            user_message_count = sum(
-                1 for msg in self.conversation_history
-                if isinstance(msg, dict) and msg.get("role") == "user"
-            )
-
-            while user_message_count > self.max_history:
-                for i, msg in enumerate(self.conversation_history):
-                    if isinstance(msg, dict) and msg.get("role") == "user":
-                        self.conversation_history.pop(i)
-                        if (i < len(self.conversation_history) and
-                                self.conversation_history[i].get("role") == "assistant"):
-                            self.conversation_history.pop(i)
-                        user_message_count -= 1
-                        break
-
-            return assistant_message
-
+            reply = self._backend.send(self.conversation_history)
+            self.conversation_history.append({"role": "assistant", "content": reply})
+            self._trim_history()
+            return reply
         except Exception:
-            logger.exception("Error communicating with agent")
+            logger.exception("Error communicating with agent backend")
             return "An internal error occurred while communicating with the agent."
 
-    def reset_session(self):
-        """Clear the conversation history to start a fresh study session."""
+    def reset_session(self) -> None:
+        """Clear conversation history to start a fresh study session."""
         self.conversation_history = []
+
+    def _trim_history(self) -> None:
+        """Remove oldest exchanges when history exceeds max_history."""
+        user_count = sum(
+            1 for m in self.conversation_history
+            if isinstance(m, dict) and m.get("role") == "user"
+        )
+        while user_count > self.max_history:
+            for i, msg in enumerate(self.conversation_history):
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    self.conversation_history.pop(i)
+                    if (
+                        i < len(self.conversation_history)
+                        and self.conversation_history[i].get("role") == "assistant"
+                    ):
+                        self.conversation_history.pop(i)
+                    user_count -= 1
+                    break
+

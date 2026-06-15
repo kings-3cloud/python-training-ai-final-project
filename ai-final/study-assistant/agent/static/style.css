@@ -90,11 +90,48 @@ body {
 
 .chat-toolbar {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
     padding: 10px 20px;
     border-bottom: 1px solid #e0e0e0;
     background: #fafafa;
+}
+
+/* Mode toggle */
+.mode-toggle {
+    display: flex;
+    gap: 4px;
+    background: #efefef;
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.mode-btn {
+    padding: 5px 12px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    background: transparent;
+    color: #666;
+    transition: background 0.15s, color 0.15s;
+}
+
+.mode-btn.active {
+    background: white;
+    color: #11998e;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+
+.mode-btn:hover:not(.active) {
+    background: #e4e4e4;
+    color: #333;
+}
+
+.mode-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(17, 153, 142, 0.25);
 }
 
 .reset-btn {

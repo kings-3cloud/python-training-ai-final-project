@@ -28,6 +28,20 @@
             <!-- Chat Area -->
             <div class="chat-container" role="region" aria-label="Chat conversation area">
                 <div class="chat-toolbar" role="toolbar" aria-label="Chat controls">
+                    <!-- Mode toggle -->
+                    <div class="mode-toggle" role="group" aria-label="Agent mode">
+                        <button id="modeOnlineBtn" class="mode-btn active"
+                            data-mode="online" title="Use Foundry-hosted agent (requires Azure login)"
+                            aria-pressed="true" tabindex="4">
+                            ☁️ Online
+                        </button>
+                        <button id="modeOfflineBtn" class="mode-btn"
+                            data-mode="offline" title="Use local model (Ollama / LM Studio)"
+                            aria-pressed="false" tabindex="5">
+                            💻 Offline
+                        </button>
+                    </div>
+
                     <button id="resetBtn" class="reset-btn"
                         title="Start a new study session"
                         aria-label="New session" tabindex="3">

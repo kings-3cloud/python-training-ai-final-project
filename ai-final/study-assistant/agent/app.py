@@ -1,77 +1,42 @@
 """
 Flask Application for the Personal Study Assistant Agent Client.
 
-Provides a web interface for interacting with the Study Assistant agent.
+Single Responsibility: HTTP route handling only.
+All business logic is delegated to AgentClient, MarkdownRenderer,
+PdfExtractor, and the factories module.
 """
+import logging
+import os
 
-import io
-
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
-import markdown
-import bleach
-import PyPDF2
 from werkzeug.utils import secure_filename
-from agent_client import AgentClient
+
+from factories import create_agent_client
+from services.markdown_renderer import MarkdownRenderer
+from services.pdf_extractor import PdfExtractor
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 MAX_PDF_SIZE = 10 * 1024 * 1024  # 10 MB
-MAX_PDF_CHARS = 4000
 
 app = Flask(__name__)
 
+# ── Application-level collaborators (created once at startup) ─────────────────
+_renderer = MarkdownRenderer()
+_extractor = PdfExtractor()
 
-def _set_external_link_attributes(attrs, new=False):
-    """Force safe external link attributes for rendered markdown links."""
-    href_key = (None, 'href')
-    href_value = attrs.get(href_key, '')
-    if isinstance(href_value, str) and href_value.startswith(('http://', 'https://')):
-        attrs[(None, 'target')] = '_blank'
-        attrs[(None, 'rel')] = 'noopener noreferrer nofollow'
-    return attrs
-
-
-def render_markdown_to_safe_html(text: str) -> str:
-    """Convert markdown to safe HTML for display in chat bubbles."""
-    raw_html = markdown.markdown(
-        text,
-        extensions=['extra', 'sane_lists', 'nl2br']
-    )
-
-    allowed_tags = [
-        'p', 'br', 'hr', 'blockquote',
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-        'ul', 'ol', 'li',
-        'strong', 'em', 'code', 'pre',
-        'a',
-        'table', 'thead', 'tbody', 'tr', 'th', 'td'
-    ]
-    allowed_attrs = {
-        'a': ['href', 'title', 'target', 'rel'],
-        'code': ['class']
-    }
-
-    safe_html = bleach.clean(
-        raw_html,
-        tags=allowed_tags,
-        attributes=allowed_attrs,
-        protocols=['http', 'https', 'mailto'],
-        strip=True
-    )
-
-    safe_html = bleach.linkify(
-        safe_html,
-        skip_tags=['pre', 'code'],
-        callbacks=[_set_external_link_attributes]
-    )
-    return safe_html
-
-
-# Initialise the agent client once at startup
+_current_mode = os.environ.get("DEFAULT_MODE", "online")
 try:
-    agent = AgentClient()
-except Exception as e:
-    print(f"Warning: Failed to initialise agent client: {e}")
+    agent = create_agent_client(_current_mode)
+except Exception as exc:
+    logger.warning("Failed to initialise agent client: %s", exc)
     agent = None
 
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/')
 def index():
@@ -83,26 +48,48 @@ def index():
 def chat():
     """Accept a user message and return the agent's response."""
     if not agent:
-        return jsonify({
-            'error': 'Agent client not initialised. Check your .env configuration.'
-        }), 500
+        return jsonify({'error': 'Agent client not initialised. Check your .env configuration.'}), 500
 
     data = request.json
     user_message = (data or {}).get('message', '').strip()
 
     if not user_message:
         return jsonify({'error': 'Message is required'}), 400
-
     if len(user_message) > 10000:
         return jsonify({'error': 'Message too long'}), 400
 
     response = agent.send_message(user_message)
-    response_html = render_markdown_to_safe_html(response)
-
     return jsonify({
         'response': response,
-        'response_html': response_html
+        'response_html': _renderer.render(response),
     })
+
+
+@app.route('/mode', methods=['GET'])
+def get_mode():
+    """Return the current agent mode."""
+    return jsonify({'mode': agent.mode if agent else _current_mode})
+
+
+@app.route('/mode', methods=['POST'])
+def set_mode():
+    """Switch between online and offline agent modes."""
+    global agent, _current_mode
+    data = request.json or {}
+    new_mode = data.get('mode', '').strip().lower()
+
+    if new_mode not in ('online', 'offline'):
+        return jsonify({'error': 'mode must be "online" or "offline"'}), 400
+
+    if agent and agent.mode == new_mode:
+        return jsonify({'mode': new_mode, 'changed': False})
+
+    try:
+        agent = create_agent_client(new_mode)
+        _current_mode = new_mode
+        return jsonify({'mode': new_mode, 'changed': True})
+    except Exception as exc:
+        return jsonify({'error': f'Could not switch to {new_mode} mode: {exc}'}), 500
 
 
 @app.route('/reset', methods=['POST'])
@@ -128,30 +115,23 @@ def upload_pdf():
         return jsonify({'error': 'Only PDF files are supported'}), 400
 
     file_bytes = file.read()
-
     if len(file_bytes) > MAX_PDF_SIZE:
         return jsonify({'error': 'File too large (max 10 MB)'}), 400
 
-    # Validate PDF magic bytes — do not trust extension alone
-    if not file_bytes.startswith(b'%PDF'):
-        return jsonify({'error': 'File does not appear to be a valid PDF'}), 400
-
     try:
-        reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        pages = [page.extract_text() or '' for page in reader.pages]
-        text = '\n'.join(pages).strip()
-    except Exception as e:
-        return jsonify({'error': f'Could not read PDF: {e}'}), 422
-
-    if not text:
-        return jsonify({'error': 'No text could be extracted (the PDF may be image-only)'}), 422
+        text, truncated = _extractor.extract(file_bytes)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 422
+    except Exception as exc:
+        return jsonify({'error': f'Could not read PDF: {exc}'}), 422
 
     return jsonify({
         'filename': filename,
-        'content': text[:MAX_PDF_CHARS],
-        'truncated': len(text) > MAX_PDF_CHARS
+        'content': text,
+        'truncated': truncated,
     })
 
 
 if __name__ == '__main__':
     app.run(debug=False, port=5000)
+
