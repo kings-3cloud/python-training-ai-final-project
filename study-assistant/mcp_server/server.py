@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mcp.server.fastmcp import FastMCP
 
 from mcp_server.tools.fetch_url import fetch_url_content
-from mcp_server.tools.quiz import generate_quiz
+from mcp_server.tools.quiz import generate_quiz, score_quiz
 from mcp_server.tools.progress import save_progress
 
 mcp = FastMCP("study-assistant")
@@ -67,6 +67,21 @@ def save_progress_tool(topic: str, score: int, total: int) -> str:
         or an error string if the write fails.
     """
     return save_progress(topic, score, total)
+
+
+@mcp.tool()
+def score_quiz_tool(answers: list[str]) -> str:
+    """
+    Grade the user's answers against the most recently generated quiz.
+
+    Args:
+        answers: The user's answer letters in question order,
+                 e.g. ["A", "C", "B", "D", "A"].
+
+    Returns:
+        Score string such as "2/5", or an error string if no quiz is active.
+    """
+    return score_quiz(answers)
 
 
 if __name__ == "__main__":

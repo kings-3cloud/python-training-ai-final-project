@@ -10,7 +10,7 @@ concrete OpenAI client or Azure credential.
 import logging
 from typing import Any, Dict, List
 
-from backends.base import AgentBackend
+from backends.base import AgentBackend, TransientBackendError
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,13 @@ class AgentClient:
             self.conversation_history.append({"role": "assistant", "content": reply})
             self._trim_history()
             return reply
+        except TransientBackendError as exc:
+            # Roll back the user message so the history stays clean for a retry.
+            self.conversation_history.pop()
+            return str(exc)
         except Exception:
+            # Roll back the user message on unexpected errors too.
+            self.conversation_history.pop()
             logger.exception("Error communicating with agent backend")
             return "An internal error occurred while communicating with the agent."
 

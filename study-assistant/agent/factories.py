@@ -11,6 +11,8 @@ Open/Closed: adding a new mode means adding a new _build_*_backend()
 function and a branch in create_agent_client(), without touching
 AgentClient, app.py, or the backends themselves.
 """
+import functools
+import json as _json
 import logging
 import os
 import sys
@@ -28,6 +30,62 @@ if str(_STUDY_ROOT) not in sys.path:
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
+
+# Configurable default question count — reads the same env var as quiz.py.
+_QUIZ_NUM_QUESTIONS: int = max(1, int(os.getenv("QUIZ_NUM_QUESTIONS", "5")))
+
+
+# ---------------------------------------------------------------------------
+# Quiz state — updated every time generate_quiz is called so that score_quiz
+# can grade answers deterministically instead of relying on LLM reasoning.
+# ---------------------------------------------------------------------------
+_active_quiz_answers: list = []
+
+
+def _quiz_state_wrapper(fn):
+    """Wrap a quiz-generation callable to capture the correct answers."""
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        global _active_quiz_answers
+        result = fn(*args, **kwargs)
+        try:
+            if isinstance(result, list):
+                questions = result
+                # Normalise to JSON string so the LLM always receives the same format
+                serialised = _json.dumps(questions)
+            else:
+                raw = str(result).strip()
+                # Strip optional markdown code fences from LLM output
+                if raw.startswith("```"):
+                    raw = raw.split("```", 2)[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                    raw = raw.rsplit("```", 1)[0].strip()
+                questions = _json.loads(raw)
+                serialised = result
+            _active_quiz_answers = [
+                str(q.get("answer", "")).strip().upper() for q in questions
+            ]
+            return serialised
+        except Exception as exc:
+            logger.warning("Could not store quiz answers for scoring: %s", exc)
+            return result
+    return _wrapper
+
+
+def _score_quiz(answers) -> str:
+    """Compare the user's answers to the stored correct answers. Returns 'X/Y'."""
+    if not _active_quiz_answers:
+        return "Error: no active quiz. Please call generate_quiz first."
+    if isinstance(answers, str):
+        user = [a.strip().upper() for a in answers.replace(",", " ").split() if a.strip()]
+    else:
+        user = [str(a).strip().upper() for a in answers]
+    total = len(_active_quiz_answers)
+    correct = sum(
+        1 for i, a in enumerate(user[:total]) if a == _active_quiz_answers[i]
+    )
+    return f"{correct}/{total}"
 
 
 def create_agent_client(mode: str = "online"):
@@ -58,13 +116,19 @@ def create_agent_client(mode: str = "online"):
 # ── Backend builders ──────────────────────────────────────────────────────────
 
 def _build_online_backend():
-    """Wire up an OnlineAgentBackend with Foundry credentials."""
+    """Wire up an OnlineAgentBackend with Foundry Chat Completions and local tools."""
     from azure.identity import DefaultAzureCredential, get_bearer_token_provider
     from backends.online import OnlineAgentBackend
+    from backends.offline import ToolRegistry
+    from mcp_server.tools.fetch_url import fetch_url_content
+    from mcp_server.tools.progress import save_progress
+    from mcp_server.tools.quiz import generate_quiz as _generate_quiz_azure
 
     endpoint = os.getenv("AGENT_ENDPOINT", "").replace("/responses", "").rstrip("/")
     if not endpoint:
         raise ValueError("AGENT_ENDPOINT is not set in environment variables.")
+
+    model = os.getenv("ONLINE_MODEL", "gpt-4o")
 
     client = OpenAI(
         api_key=get_bearer_token_provider(
@@ -74,7 +138,22 @@ def _build_online_backend():
         base_url=endpoint,
         default_query={"api-version": "v1"},
     )
-    return OnlineAgentBackend(client=client)
+
+    registry = ToolRegistry()
+    registry.register("fetch_url_content", fetch_url_content)
+    registry.register(
+        "save_progress",
+        lambda topic, score, total: save_progress(topic, int(score), int(total))
+    )
+    registry.register(
+        "generate_quiz",
+        _quiz_state_wrapper(
+            lambda topic, num_questions=_QUIZ_NUM_QUESTIONS: _generate_quiz_azure(topic, int(num_questions))
+        )
+    )
+    registry.register("score_quiz", _score_quiz)
+
+    return OnlineAgentBackend(client=client, model=model, registry=registry)
 
 
 def _build_offline_backend():
@@ -98,10 +177,13 @@ def _build_offline_backend():
     )
     registry.register(
         "generate_quiz",
-        lambda topic, num_questions=5: _generate_quiz_local(
-            client, model, topic, int(num_questions)
+        _quiz_state_wrapper(
+            lambda topic, num_questions=_QUIZ_NUM_QUESTIONS: _generate_quiz_local(
+                client, model, topic, int(num_questions)
+            )
         )
     )
+    registry.register("score_quiz", _score_quiz)
 
     return OfflineAgentBackend(client=client, model=model, registry=registry)
 

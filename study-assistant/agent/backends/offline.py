@@ -14,9 +14,9 @@ import json
 import logging
 from typing import Any, Callable, Dict, List
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError, APIStatusError
 
-from .base import AgentBackend
+from .base import AgentBackend, TransientBackendError
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,13 @@ _SYSTEM_PROMPT = (
     "generating quizzes, and tracking progress. Be concise and encouraging. "
     "IMPORTANT: You have tools available — you MUST call them, never just describe calling them. "
     "Rules:\n"
-    "- When the user provides a quiz score or asks to save progress, you MUST call the "
-    "save_progress tool immediately. Do NOT write text like 'I'll save your score' — "
-    "call the tool first, then confirm once the tool returns.\n"
+    "- When the user asks for a quiz, call generate_quiz to get the questions.\n"
+    "- After the user has answered all quiz questions you MUST:\n"
+    "  1. Call score_quiz(answers=[...]) with their answers to get the exact score.\n"
+    "     NEVER calculate or guess the score yourself.\n"
+    "  2. Call save_progress(topic, score, total) using the integer numbers from score_quiz.\n"
     "- When the user asks to fetch a URL, call fetch_url_content.\n"
-    "- When the user asks for a quiz, call generate_quiz."
+    "- Do NOT write 'I will call ...' \u2014 call the tool immediately.\n"
 )
 
 # OpenAI function-calling schema for all registered tools.
@@ -79,6 +81,29 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                     "total": {"type": "integer", "description": "Total number of questions"}
                 },
                 "required": ["topic", "score", "total"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "score_quiz",
+            "description": (
+                "Grade the user's answers for the current quiz. "
+                "Returns the exact score as 'X/Y'. "
+                "Always call this after the user has answered all questions "
+                "\u2014 never guess or calculate the score yourself."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "User's answer letters in question order, e.g. ['A', 'C', 'B', 'D', 'A']"
+                    }
+                },
+                "required": ["answers"]
             }
         }
     }
@@ -142,13 +167,25 @@ class OfflineAgentBackend(AgentBackend):
         ] + list(history)
 
         while True:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                tools=TOOL_SCHEMAS,
-                tool_choice="auto",
-                temperature=0.7,
-            )
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    tools=TOOL_SCHEMAS,
+                    tool_choice="auto",
+                    temperature=0.7,
+                )
+            except RateLimitError:
+                raise TransientBackendError(
+                    "⚠️ The local model is rate-limited. "
+                    "Please wait a moment and try again."
+                )
+            except APIStatusError as exc:
+                logger.error("API error in offline backend: %s", exc)
+                raise TransientBackendError(
+                    f"⚠️ The model returned an error ({exc.status_code}): {exc.message}"
+                )
+
             choice = response.choices[0]
 
             if choice.finish_reason == "tool_calls":

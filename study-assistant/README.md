@@ -19,13 +19,14 @@ Change directory to `cd study-assistant`
 4. Run agent app: `python agent/app.py`
 
 ## Run MCP server
-```
-# from inside mcp_server/ (what mcp dev does)
-mcp dev server.py
-
-# from study-assistant/ root
+```powershell
+# from study-assistant/ root — run the server directly (stdio transport)
 python -m mcp_server.server
 
-mcp inspector
-npx @modelcontextprotocol/inspector
+# from study-assistant/ root — run with MCP Inspector UI (opens http://localhost:6274)
+# Note: uv installs mcp.exe as a trampoline that fails on Windows; invoke via Python instead
+python -c "from mcp.cli.cli import app; app()" dev mcp_server/server.py
+
+# Alternative: Node-based inspector (requires Node.js)
+npx @modelcontextprotocol/inspector python -m mcp_server.server
 ```

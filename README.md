@@ -76,7 +76,7 @@ Both modes support fetching web content, generating quizzes, and persisting stud
 ## Project Structure
 
 ```
-ai-final/
+root folder/
 ├── study-assistant/
 │   ├── mcp_server/
 │   │   ├── server.py              # FastMCP server — registers all three tools
@@ -164,7 +164,6 @@ ai-final/
 
 ### 1 — Activate the virtual environment
 ```powershell
-cd ai-final
 .\.venv\Scripts\Activate.ps1
 ```
 

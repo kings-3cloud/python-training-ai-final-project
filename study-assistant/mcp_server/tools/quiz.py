@@ -13,6 +13,13 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Module-level quiz state — updated every time generate_quiz succeeds.
+# Used by score_quiz to grade answers deterministically.
+_current_quiz: list[dict] = []
+
+# Configurable default question count (override via QUIZ_NUM_QUESTIONS in .env).
+_DEFAULT_NUM_QUESTIONS: int = max(1, int(os.getenv("QUIZ_NUM_QUESTIONS", "5")))
+
 SYSTEM_PROMPT = (
     "You are a quiz generator. "
     "Return a JSON array of {question, options: [A,B,C,D], answer} objects. "
@@ -37,7 +44,7 @@ def _make_client() -> OpenAI:
     )
 
 
-def generate_quiz(topic: str, num_questions: int = 5) -> list[dict[str, Any]]:
+def generate_quiz(topic: str, num_questions: int = _DEFAULT_NUM_QUESTIONS) -> list[dict[str, Any]]:
     """
     Generate a multiple-choice quiz on *topic* with *num_questions* questions.
 
@@ -73,6 +80,8 @@ def generate_quiz(topic: str, num_questions: int = 5) -> list[dict[str, Any]]:
             raw = raw.rsplit("```", 1)[0].strip()
 
         quiz: list[dict[str, Any]] = json.loads(raw)
+        global _current_quiz
+        _current_quiz = quiz
         return quiz
 
     except json.JSONDecodeError as e:
@@ -84,6 +93,30 @@ def generate_quiz(topic: str, num_questions: int = 5) -> list[dict[str, Any]]:
     except Exception as e:
         logger.error("Unexpected error in generate_quiz: %s", e)
         return []
+
+
+def score_quiz(answers: list[str]) -> str:
+    """
+    Grade the user's answers against the most recently generated quiz.
+
+    Args:
+        answers: The user's answer letters in question order,
+                 e.g. ["A", "C", "B", "D", "A"].
+
+    Returns:
+        Score string such as "2/5", or an error string if no quiz is active.
+    """
+    if not _current_quiz:
+        return "Error: no active quiz. Please call generate_quiz first."
+
+    total = len(_current_quiz)
+    correct = sum(
+        1
+        for i, question in enumerate(_current_quiz)
+        if i < len(answers)
+        and str(answers[i]).strip().upper() == str(question.get("answer", "")).strip().upper()
+    )
+    return f"{correct}/{total}"
 
 
 if __name__ == "__main__":

@@ -11,6 +11,14 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 
+class TransientBackendError(Exception):
+    """
+    Raised by a backend when the error is transient (e.g. rate limit, temporary
+    service unavailability) and the caller should roll back the last user message
+    so the user can safely retry without corrupting the conversation history.
+    """
+
+
 class AgentBackend(ABC):
     """Minimal interface for sending a conversation to an agent backend."""
 
