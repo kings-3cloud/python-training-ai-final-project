@@ -29,13 +29,14 @@ class OnlineAgentBackend(AgentBackend):
         return "online"
 
     def send(self, history: List[Dict[str, Any]]) -> str:
-        # Import shared schemas and prompt from offline to avoid duplication.
-        from .offline import TOOL_SCHEMAS, _SYSTEM_PROMPT
+        # Import shared schemas, prompt, and nudge helpers from offline to avoid duplication.
+        from .offline import TOOL_SCHEMAS, _SYSTEM_PROMPT, _looks_like_announcement, _MAX_NUDGES
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": _SYSTEM_PROMPT}
         ] + list(history)
 
+        nudge_count = 0
         while True:
             try:
                 response = self._client.chat.completions.create(
@@ -69,4 +70,13 @@ class OnlineAgentBackend(AgentBackend):
                         "content": result,
                     })
             else:
-                return choice.message.content or ""
+                content = choice.message.content or ""
+                if nudge_count < _MAX_NUDGES and _looks_like_announcement(content):
+                    nudge_count += 1
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({
+                        "role": "system",
+                        "content": "Call the appropriate tool now. Do not generate a text response first.",
+                    })
+                else:
+                    return content

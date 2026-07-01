@@ -24,17 +24,38 @@ ToolHandler = Callable[..., str]
 
 _SYSTEM_PROMPT = (
     "You are a Personal Study Assistant. Help the user learn by fetching content, "
-    "generating quizzes, and tracking progress. Be concise and encouraging. "
-    "IMPORTANT: You have tools available — you MUST call them, never just describe calling them. "
-    "Rules:\n"
-    "- When the user asks for a quiz, call generate_quiz to get the questions.\n"
-    "- After the user has answered all quiz questions you MUST:\n"
-    "  1. Call score_quiz(answers=[...]) with their answers to get the exact score.\n"
-    "     NEVER calculate or guess the score yourself.\n"
-    "  2. Call save_progress(topic, score, total) using the integer numbers from score_quiz.\n"
-    "- When the user asks to fetch a URL, call fetch_url_content.\n"
-    "- Do NOT write 'I will call ...' \u2014 call the tool immediately.\n"
+    "generating quizzes, and tracking progress. Be concise and encouraging.\n"
+    "CRITICAL RULES — follow these without exception:\n"
+    "1. NEVER send a plain-text message that only describes what you are about to do. "
+    "   If a tool call is needed, make it your FIRST action \u2014 not a text announcement.\n"
+    "2. When the user provides a URL, your very first action MUST be a fetch_url_content tool call.\n"
+    "3. When the user asks for a quiz, immediately call generate_quiz.\n"
+    "4. After the user answers all quiz questions:\n"
+    "   a. Call score_quiz(answers=[...]) \u2014 NEVER estimate or guess the score.\n"
+    "   b. Then call save_progress(topic, score, total) with the numbers from score_quiz.\n"
+    "5. Only respond with text AFTER all required tool calls are complete.\n"
 )
+
+# Phrases that indicate the model announced an upcoming tool call instead of making one.
+_PENDING_TOOL_PHRASES = frozenset({
+    "one moment", "just a moment", "please wait", "stand by",
+    "fetching", "let me fetch", "i'll fetch", "i will fetch",
+    "gathering", "let me gather", "i'll gather",
+    "looking that up", "i'll look", "let me look",
+    "pulling up", "retrieving", "i'll retrieve",
+})
+
+# Maximum number of times the loop will nudge the model before returning its text as-is.
+_MAX_NUDGES = 2
+
+
+def _looks_like_announcement(text: str) -> bool:
+    """Return True when the response is a short preamble announcing an upcoming tool call."""
+    if len(text) > 400:  # genuine content is typically longer
+        return False
+    lower = text.lower()
+    return any(phrase in lower for phrase in _PENDING_TOOL_PHRASES)
+
 
 # OpenAI function-calling schema for all registered tools.
 # Add a new entry here when a new tool is added to the registry.
@@ -166,6 +187,7 @@ class OfflineAgentBackend(AgentBackend):
             {"role": "system", "content": _SYSTEM_PROMPT}
         ] + list(history)
 
+        nudge_count = 0
         while True:
             try:
                 response = self._client.chat.completions.create(
@@ -199,4 +221,13 @@ class OfflineAgentBackend(AgentBackend):
                         "content": result,
                     })
             else:
-                return choice.message.content or ""
+                content = choice.message.content or ""
+                if nudge_count < _MAX_NUDGES and _looks_like_announcement(content):
+                    nudge_count += 1
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({
+                        "role": "system",
+                        "content": "Call the appropriate tool now. Do not generate a text response first.",
+                    })
+                else:
+                    return content
